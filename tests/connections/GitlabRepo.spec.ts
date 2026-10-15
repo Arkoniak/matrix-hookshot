@@ -132,6 +132,7 @@ const COMMENT_DEBOUNCE_MS = 25;
 function createConnection(
   state: Partial<GitLabRepoConnectionState> = {},
   isExistingState = false,
+  config: Partial<BridgeConfigGitLab> = {},
 ): {
   connection: GitLabRepoConnection;
   intent: IntentMock;
@@ -155,6 +156,7 @@ function createConnection(
     as,
     {
       commentDebounceMs: COMMENT_DEBOUNCE_MS,
+      ...config,
     } as BridgeConfigGitLab,
     intent,
     GitLabRepoConnection.validateState(
@@ -1211,6 +1213,28 @@ describe("GitLabRepoConnection", () => {
         await connection.onPipelineEvent(pipelineEvent({ status: "failed" }));
         expect(intent.sentEvents).toHaveLength(1);
         expect(relation(0, intent)).toBeUndefined();
+      });
+
+      it("should thread by default when the bridge config says so", async () => {
+        const { connection, intent } = createConnection(
+          { enableHooks: ["pipeline"] },
+          false,
+          { defaultOptions: { pipelineThreads: true } },
+        );
+        await connection.onPipelineEvent(pipelineEvent({ status: "running" }));
+        await connection.onPipelineEvent(pipelineEvent({ status: "success" }));
+        expect(relation(1, intent)?.event_id).toEqual("event_0");
+      });
+
+      it("should let a room turn threads off despite the bridge config", async () => {
+        const { connection, intent } = createConnection(
+          { enableHooks: ["pipeline"], pipelineThreads: false },
+          false,
+          { defaultOptions: { pipelineThreads: true } },
+        );
+        await connection.onPipelineEvent(pipelineEvent({ status: "running" }));
+        await connection.onPipelineEvent(pipelineEvent({ status: "success" }));
+        expect(relation(1, intent)).toBeUndefined();
       });
 
       it("should store the thread roots", async () => {

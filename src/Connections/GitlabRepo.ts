@@ -61,7 +61,8 @@ export interface GitLabRepoConnectionState extends IConnectionState {
   excludingLabels?: string[];
   /**
    * Post every status update of a pipeline in a thread under the first message
-   * about it, instead of as separate messages.
+   * about it, instead of as separate messages. Defaults to
+   * `gitlab.defaultOptions.pipelineThreads` from the bridge config.
    */
   pipelineThreads?: boolean;
 }
@@ -676,6 +677,8 @@ export class GitLabRepoConnection
 
   private readonly hookFilter: HookFilter<AllowedEventsNames>;
 
+  private readonly defaultPipelineThreads: boolean;
+
   private readonly grantChecker;
   private readonly commentDebounceMs: number;
 
@@ -710,6 +713,8 @@ export class GitLabRepoConnection
     }
     this.hookFilter = new HookFilter(state.enableHooks ?? DefaultHooks);
     this.commentDebounceMs = config.commentDebounceMs;
+    this.defaultPipelineThreads =
+      config.defaultOptions?.pipelineThreads ?? false;
   }
 
   public get path() {
@@ -1083,7 +1088,7 @@ ${data.description}`;
     const contentText = `Pipeline [#${id}](${url}) **${display.label}** on ${refKind} \`${ref}\` for project [${event.project.name}](${event.project.web_url}) by **${event.user.username}**${suffixText}${durationText}`;
     const contentHtml = `Pipeline <a href="${escapeHtml(url)}">#${id}</a> <span data-mx-color="${display.color}"><b>${display.label}</b></span> on ${refKind} <code>${escapeHtml(ref)}</code> for project <a href="${escapeHtml(event.project.web_url)}">${escapeHtml(event.project.name)}</a> by <b>${escapeHtml(event.user.username)}</b>${suffixHtml}${durationText}`;
 
-    if (!this.state.pipelineThreads) {
+    if (!(this.state.pipelineThreads ?? this.defaultPipelineThreads)) {
       await this.sendEvent(contentText, { formatted_body: contentHtml });
       return;
     }

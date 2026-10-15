@@ -30,6 +30,16 @@ Previously Hookshot supported <code>/</code> as the public path for webhook deli
 The `publicUrl` must be the URL where GitLab webhook events are received (i.e. the path to `/gitlab/webhook`
 for your `webhooks` listener).
 
+Optionally, `defaultOptions` sets defaults for connection options a room has not set itself:
+
+```yaml
+gitlab:
+  defaultOptions:
+    # Post pipeline status updates in a thread in every room, unless a room sets
+    # `pipelineThreads: false` in its own connection settings.
+    pipelineThreads: true
+```
+
 <section class="warning">
 The GitLab hooks "test" button allows you to check that your webhooks are configured properly. The
 merge request, issue and release notifications lack a <code>action</code> field in the body of the
