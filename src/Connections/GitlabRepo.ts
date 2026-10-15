@@ -14,6 +14,7 @@ import {
   IGitLabWebhookTagPushEvent,
   IGitLabWebhookWikiPageEvent,
   IGitLabWebhookPipelineEvent,
+  IGitLabPipelineBuild,
   GitLabPipelineStatus,
 } from "../gitlab/WebhookTypes";
 import { CommandConnection } from "./CommandConnection";
@@ -105,6 +106,44 @@ function isNotifiedPipelineStatus(
   status: GitLabPipelineStatus,
 ): status is NotifiedPipelineStatus {
   return Object.hasOwn(PIPELINE_STATUS_DISPLAY, status);
+}
+
+const PIPELINE_MAX_LISTED_JOBS = 5;
+
+/**
+ * The jobs worth naming in a pipeline notification: what failed, or which
+ * manual jobs are waiting. Manual jobs with `allow_failure: true` do not block
+ * the pipeline, so a pipeline can succeed while one still waits; that is
+ * reported too.
+ */
+function pipelineJobsNote(
+  event: IGitLabWebhookPipelineEvent,
+  status: NotifiedPipelineStatus,
+): { label: string; jobs: IGitLabPipelineBuild[] } | undefined {
+  const builds = [...(event.builds ?? [])].sort((a, b) => a.id - b.id);
+  let jobs: IGitLabPipelineBuild[];
+  let label: string;
+  if (status === "failed") {
+    jobs = builds.filter((b) => b.status === "failed" && !b.allow_failure);
+    label = jobs.length === 1 ? "failed job" : "failed jobs";
+  } else if (status === "manual") {
+    // Only manual jobs that may not fail hold the pipeline; optional ones are
+    // also in `manual` status, but nothing waits for them.
+    const blocking = builds.filter(
+      (b) => b.status === "manual" && !b.allow_failure,
+    );
+    jobs = blocking.length
+      ? blocking
+      : builds.filter((b) => b.status === "manual");
+    label =
+      jobs.length === 1 ? "waiting for manual job" : "waiting for manual jobs";
+  } else if (status === "success") {
+    jobs = builds.filter((b) => b.status === "manual");
+    label = jobs.length === 1 ? "manual job not run" : "manual jobs not run";
+  } else {
+    return undefined;
+  }
+  return jobs.length ? { label, jobs } : undefined;
 }
 
 function escapeHtml(text: string): string {
@@ -998,10 +1037,32 @@ ${data.description}`;
       `${event.project.web_url}/-/pipelines/${id}`;
     const refKind = tag ? "tag" : "branch";
     const durationText = duration != null ? ` - Duration: ${duration}s` : "";
-    const suffixText = display.suffix ? ` - ${display.suffix}` : "";
+    let suffixText = display.suffix ? ` - ${display.suffix}` : "";
+    let suffixHtml = escapeHtml(suffixText);
+    const jobsNote = pipelineJobsNote(event, status);
+    if (jobsNote) {
+      const listed = jobsNote.jobs.slice(0, PIPELINE_MAX_LISTED_JOBS);
+      const more = jobsNote.jobs.length - listed.length;
+      const jobUrl = (job: IGitLabPipelineBuild) =>
+        `${event.project.web_url}/-/jobs/${job.id}`;
+      const reason = (job: IGitLabPipelineBuild) =>
+        status === "failed" && job.failure_reason
+          ? ` (${job.failure_reason.replace(/_/g, " ")})`
+          : "";
+      const moreText = more > 0 ? ` and ${more} more` : "";
+      suffixText = ` - ${jobsNote.label}: ${listed
+        .map((job) => `[${job.name}](${jobUrl(job)})${reason(job)}`)
+        .join(", ")}${moreText}`;
+      suffixHtml = ` - ${escapeHtml(jobsNote.label)}: ${listed
+        .map(
+          (job) =>
+            `<a href="${escapeHtml(jobUrl(job))}">${escapeHtml(job.name)}</a>${escapeHtml(reason(job))}`,
+        )
+        .join(", ")}${moreText}`;
+    }
 
     const contentText = `Pipeline [#${id}](${url}) **${display.label}** on ${refKind} \`${ref}\` for project [${event.project.name}](${event.project.web_url}) by **${event.user.username}**${suffixText}${durationText}`;
-    const contentHtml = `Pipeline <a href="${escapeHtml(url)}">#${id}</a> <span data-mx-color="${display.color}"><b>${display.label}</b></span> on ${refKind} <code>${escapeHtml(ref)}</code> for project <a href="${escapeHtml(event.project.web_url)}">${escapeHtml(event.project.name)}</a> by <b>${escapeHtml(event.user.username)}</b>${escapeHtml(suffixText)}${durationText}`;
+    const contentHtml = `Pipeline <a href="${escapeHtml(url)}">#${id}</a> <span data-mx-color="${display.color}"><b>${display.label}</b></span> on ${refKind} <code>${escapeHtml(ref)}</code> for project <a href="${escapeHtml(event.project.web_url)}">${escapeHtml(event.project.name)}</a> by <b>${escapeHtml(event.user.username)}</b>${suffixHtml}${durationText}`;
 
     await this.sendEvent(contentText, { formatted_body: contentHtml });
   }

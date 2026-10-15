@@ -61,6 +61,10 @@ the events marked as default below will be enabled. Otherwise, this is ignored.
   - pipeline.canceled \*
   - pipeline.manual \*
 
+Pipeline notifications name the jobs that matter, with links: the jobs that failed (with GitLab's
+failure reason), the manual jobs a pipeline is waiting for, and, after a successful pipeline, manual
+jobs that were left unrun (manual jobs with `allow_failure: true` do not block the pipeline).
+
 Pipeline events require the **Pipeline events** trigger on the project's GitLab webhook. Hookshot enables it
 when it creates the webhook itself; for a webhook created by hand, or one created by an older version of
 Hookshot, enable the trigger in the project's webhook settings.
