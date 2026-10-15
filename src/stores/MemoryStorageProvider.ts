@@ -3,7 +3,10 @@ import { IBridgeStorageProvider, MAX_FEED_ITEMS } from "./StorageProvider";
 import { IssuesGetResponseData } from "../github/Types";
 import { ProvisionSession } from "matrix-appservice-bridge";
 import QuickLRU from "@alloc/quick-lru";
-import { SerializedGitlabDiscussionThreads } from "../gitlab/Types";
+import {
+  SerializedGitlabDiscussionThreads,
+  SerializedGitlabPipelineThreads,
+} from "../gitlab/Types";
 import { OpenProjectWorkPackageCacheState } from "../openproject/State";
 
 export class MemoryStorageProvider
@@ -19,6 +22,10 @@ export class MemoryStorageProvider
   private gitlabDiscussionThreads = new Map<
     string,
     SerializedGitlabDiscussionThreads
+  >();
+  private gitlabPipelineThreads = new Map<
+    string,
+    SerializedGitlabPipelineThreads
   >();
   private feedGuids = new Map<string, Array<string>>();
   private houndActivityIds = new Map<string, Array<string>>();
@@ -158,6 +165,19 @@ export class MemoryStorageProvider
     value: SerializedGitlabDiscussionThreads,
   ): Promise<void> {
     this.gitlabDiscussionThreads.set(connectionId, value);
+  }
+
+  public async getGitlabPipelineThreads(
+    connectionId: string,
+  ): Promise<SerializedGitlabPipelineThreads> {
+    return this.gitlabPipelineThreads.get(connectionId) ?? [];
+  }
+
+  public async setGitlabPipelineThreads(
+    connectionId: string,
+    value: SerializedGitlabPipelineThreads,
+  ): Promise<void> {
+    this.gitlabPipelineThreads.set(connectionId, value);
   }
 
   async storeHoundActivity(

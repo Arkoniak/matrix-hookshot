@@ -51,6 +51,7 @@ const ConnectionConfiguration: FunctionComponent<
   );
   const commandPrefixRef = createRef<HTMLInputElement>();
   const includeBodyRef = createRef<HTMLInputElement>();
+  const pipelineThreadsRef = createRef<HTMLInputElement>();
   const handleSave = useCallback(
     (evt: Event) => {
       evt.preventDefault();
@@ -63,6 +64,7 @@ const ConnectionConfiguration: FunctionComponent<
           ...state,
           enableHooks: enabledHooks as any[],
           includeCommentBody: includeBodyRef.current?.checked,
+          pipelineThreads: pipelineThreadsRef.current?.checked,
           showUrlPreviews,
           commandPrefix:
             commandPrefixRef.current?.value ||
@@ -72,6 +74,7 @@ const ConnectionConfiguration: FunctionComponent<
     },
     [
       includeBodyRef,
+      pipelineThreadsRef,
       canEdit,
       existingConnection,
       newConnectionState,
@@ -192,6 +195,18 @@ const ConnectionConfiguration: FunctionComponent<
           disabled={!canEdit}
           type="checkbox"
           checked={!!existingConnection?.config.includeCommentBody}
+        />
+      </InputField>
+      <InputField
+        visible={!!existingConnection || !!newConnectionState}
+        label="Post pipeline updates in a thread"
+        noPadding={true}
+      >
+        <input
+          ref={pipelineThreadsRef}
+          disabled={!canEdit}
+          type="checkbox"
+          checked={!!existingConnection?.config.pipelineThreads}
         />
       </InputField>
       <InputField

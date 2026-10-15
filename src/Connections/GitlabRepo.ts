@@ -30,6 +30,7 @@ import { ErrCode, ApiError, ValidatorApiError } from "../api";
 import {
   AccessLevel,
   SerializedGitlabDiscussionThreads,
+  SerializedGitlabPipelineThreads,
 } from "../gitlab/Types";
 import Ajv, { JSONSchemaType } from "ajv";
 import { CommandError } from "../Errors";
@@ -65,6 +66,11 @@ export interface GitLabRepoConnectionState extends IConnectionState {
    * GitLab token: adding the webhook to the project is the proof of access.
    */
   dedicatedWebhook?: boolean;
+  /**
+   * Post every status update of a pipeline in a thread under the first message
+   * about it, instead of as separate messages.
+   */
+  pipelineThreads?: boolean;
 }
 
 /**
@@ -285,6 +291,10 @@ const ConnectionStateSchema = {
       type: "boolean",
       nullable: true,
     },
+    pipelineThreads: {
+      type: "boolean",
+      nullable: true,
+    },
     showUrlPreviews: {
       type: "boolean",
       nullable: true,
@@ -440,6 +450,9 @@ export class GitLabRepoConnection
       connection.connectionId,
     );
     connection.setDiscussionThreads(discussionThreads);
+    connection.setPipelineThreads(
+      await storage.getGitlabPipelineThreads(connection.connectionId),
+    );
 
     return connection;
   }
@@ -849,6 +862,12 @@ export class GitLabRepoConnection
 
   private readonly discussionThreads = new QuickLRU<
     string,
+    Promise<string | undefined>
+  >({ maxSize: 100 });
+
+  /** Thread root event of each recently notified pipeline, by pipeline id. */
+  private readonly pipelineThreadRoots = new QuickLRU<
+    number,
     Promise<string | undefined>
   >({ maxSize: 100 });
 
@@ -1315,7 +1334,46 @@ ${data.description}`;
     const contentText = `Pipeline [#${id}](${url}) **${display.label}** on ${refKind} \`${ref}\` for project [${event.project.name}](${event.project.web_url}) by **${event.user.username}**${suffixText}${durationText}`;
     const contentHtml = `Pipeline <a href="${escapeHtml(url)}">#${id}</a> <span data-mx-color="${display.color}"><b>${display.label}</b></span> on ${refKind} <code>${escapeHtml(ref)}</code> for project <a href="${escapeHtml(event.project.web_url)}">${escapeHtml(event.project.name)}</a> by <b>${escapeHtml(event.user.username)}</b>${suffixHtml}${durationText}`;
 
-    await this.sendEvent(contentText, { formatted_body: contentHtml });
+    if (!this.state.pipelineThreads) {
+      await this.sendEvent(contentText, { formatted_body: contentHtml });
+      return;
+    }
+
+    // The first message about a pipeline becomes the thread root. The root is
+    // recorded before it is sent, with no await in between, so that status
+    // updates handled concurrently join the same thread instead of starting
+    // another one.
+    const root = this.pipelineThreadRoots.get(id);
+    if (!root) {
+      const rootPromise = this.sendEvent(contentText, {
+        formatted_body: contentHtml,
+      }).catch((ex) => {
+        log.error(`Failed to send pipeline ${id} thread root`, ex);
+        return undefined;
+      });
+      this.pipelineThreadRoots.set(id, rootPromise);
+      await rootPromise;
+      void this.persistPipelineThreads().catch((ex) => {
+        log.error(
+          `Failed to persistently store GitLab pipeline threads for connection ${this.connectionId}:`,
+          ex,
+        );
+      });
+      return;
+    }
+    const rootEventId = await root;
+    await this.sendEvent(contentText, {
+      formatted_body: contentHtml,
+      ...(rootEventId && {
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: rootEventId,
+          // Clients without thread support show the update as a reply.
+          is_falling_back: true,
+          "m.in_reply_to": { event_id: rootEventId },
+        },
+      }),
+    });
   }
 
   private async renderDebouncedMergeRequest(
@@ -1606,6 +1664,30 @@ ${data.description}`;
     for (const { discussionId, eventId } of discussionThreads) {
       this.discussionThreads.set(discussionId, Promise.resolve(eventId));
     }
+  }
+
+  private setPipelineThreads(
+    pipelineThreads: SerializedGitlabPipelineThreads,
+  ): void {
+    for (const { pipelineId, eventId } of pipelineThreads) {
+      this.pipelineThreadRoots.set(pipelineId, Promise.resolve(eventId));
+    }
+  }
+
+  private async persistPipelineThreads(): Promise<void> {
+    const serialized: SerializedGitlabPipelineThreads = [];
+    for (const [
+      pipelineId,
+      eventIdPromise,
+    ] of this.pipelineThreadRoots.entriesAscending()) {
+      const eventId = await eventIdPromise.catch(() => {
+        /* logged elsewhere */
+      });
+      if (eventId) {
+        serialized.push({ pipelineId, eventId });
+      }
+    }
+    return this.storage.setGitlabPipelineThreads(this.connectionId, serialized);
   }
 
   private async persistDiscussionThreads(): Promise<void> {

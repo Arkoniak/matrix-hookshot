@@ -223,6 +223,12 @@ export type SerializedGitlabDiscussionThreads = {
   eventId: string;
 }[];
 
+/** Thread root event of each recently notified pipeline, by pipeline id. */
+export type SerializedGitlabPipelineThreads = {
+  pipelineId: number;
+  eventId: string;
+}[];
+
 export interface SimpleProject {
   avatar_url?: string;
   description?: string;
