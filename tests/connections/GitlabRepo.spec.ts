@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { createMessageQueue } from "../../src/messageQueue";
 import { UserTokenStore } from "../../src/tokens/UserTokenStore";
 import { AppserviceMock } from "../utils/AppserviceMock";
@@ -118,6 +118,8 @@ const GITLAB_PIPELINE_EVENT: IGitLabWebhookPipelineEvent = {
     id: 1,
     status: "success",
     ref: "main",
+    tag: false,
+    url: "https://gitlab.example.com/test/project/-/pipelines/1",
     duration: 120,
     created_at: "2025-05-20T10:00:00Z",
     finished_at: "2025-05-20T10:02:00Z",
@@ -855,135 +857,163 @@ describe("GitLabRepoConnection", () => {
   });
 
   describe("onPipelineEvent", () => {
-    let baseEvent: IGitLabWebhookPipelineEvent;
-
-    beforeEach(() => {
-      baseEvent = {
+    function pipelineEvent(
+      attributes: Partial<IGitLabWebhookPipelineEvent["object_attributes"]>,
+      project: Partial<IGitLabWebhookPipelineEvent["project"]> = {},
+    ): IGitLabWebhookPipelineEvent {
+      return {
         ...GITLAB_PIPELINE_EVENT,
+        project: { ...GITLAB_PIPELINE_EVENT.project, ...project },
         object_attributes: {
           ...GITLAB_PIPELINE_EVENT.object_attributes,
+          ...attributes,
         },
       };
-    });
+    }
 
-    it("should skip onPipelineTriggered if hook is disabled", async () => {
-      const { connection, intent } = createConnection({ enableHooks: [] });
-      await connection.onPipelineTriggered({
-        ...baseEvent,
-        object_attributes: {
-          ...baseEvent.object_attributes,
-          status: "running",
-        },
+    const statuses = [
+      { status: "running", label: "RUNNING", color: "#1f75cb" },
+      { status: "success", label: "SUCCESS", color: "#00aa00" },
+      { status: "failed", label: "FAILED", color: "#ff0000" },
+      { status: "canceled", label: "CANCELED", color: "#a9a9a9" },
+      { status: "manual", label: "MANUAL", color: "#ff8800" },
+    ] as const;
+
+    it.each(statuses)(
+      "should skip $status if hook is disabled",
+      async ({ status }) => {
+        const { connection, intent } = createConnection({ enableHooks: [] });
+        await connection.onPipelineEvent(pipelineEvent({ status }));
+        intent.expectNoEvent();
+      },
+    );
+
+    it.each(statuses)(
+      "should send $status when its subtype is enabled",
+      async ({ status, label, color }) => {
+        const { connection, intent } = createConnection({
+          enableHooks: [`pipeline.${status}`],
+        });
+        await connection.onPipelineEvent(pipelineEvent({ status }));
+        expect(intent.sentEvents[0].content.body).toContain(`**${label}**`);
+        expect(intent.sentEvents[0].content.formatted_body).toContain(
+          `<span data-mx-color="${color}"><b>${label}</b></span>`,
+        );
+      },
+    );
+
+    it("should skip a status whose subtype is not enabled", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline.failed"],
       });
+      await connection.onPipelineEvent(pipelineEvent({ status: "success" }));
       intent.expectNoEvent();
     });
 
-    it("should skip onPipelineSuccess if hook is disabled", async () => {
-      const { connection, intent } = createConnection({ enableHooks: [] });
-      await connection.onPipelineSuccess({
-        ...baseEvent,
-        object_attributes: {
-          ...baseEvent.object_attributes,
-          status: "success",
-        },
-      });
-      intent.expectNoEvent();
-    });
-
-    it("should skip onPipelineFailed if hook is disabled", async () => {
-      const { connection, intent } = createConnection({ enableHooks: [] });
-      await connection.onPipelineFailed({
-        ...baseEvent,
-        object_attributes: {
-          ...baseEvent.object_attributes,
-          status: "failed",
-        },
-      });
-      intent.expectNoEvent();
-    });
-
-    it("should skip onPipelineCanceled if hook is disabled", async () => {
-      const { connection, intent } = createConnection({ enableHooks: [] });
-      await connection.onPipelineCanceled({
-        ...baseEvent,
-        object_attributes: {
-          ...baseEvent.object_attributes,
-          status: "canceled",
-        },
-      });
-      intent.expectNoEvent();
-    });
-
-    it("should send only the triggered message if pipeline just started", async () => {
+    it("should ignore statuses it does not notify about", async () => {
       const { connection, intent } = createConnection({
         enableHooks: ["pipeline"],
       });
-      await connection.onPipelineTriggered({
-        ...baseEvent,
-        object_attributes: {
-          ...baseEvent.object_attributes,
-          status: "running", // pipeline just started
-        },
-      });
-
-      intent.expectEventBodyContains("Pipeline triggered", 0);
+      await connection.onPipelineEvent(pipelineEvent({ status: "pending" }));
+      intent.expectNoEvent();
     });
 
-    it("should send final success message (green)", async () => {
+    it("should link to the pipeline", async () => {
       const { connection, intent } = createConnection({
         enableHooks: ["pipeline"],
       });
-
-      await connection.onPipelineSuccess({
-        ...baseEvent,
-        object_attributes: {
-          ...baseEvent.object_attributes,
-          status: "success",
-        },
-      });
-
-      expect(intent.sentEvents[0].content.body).toContain("SUCCESS");
+      await connection.onPipelineEvent(
+        pipelineEvent({
+          id: 42,
+          url: "https://gitlab.example.com/test/project/-/pipelines/42",
+        }),
+      );
+      expect(intent.sentEvents[0].content.body).toContain(
+        "[#42](https://gitlab.example.com/test/project/-/pipelines/42)",
+      );
       expect(intent.sentEvents[0].content.formatted_body).toContain(
-        '<span data-mx-color="#00aa00"><b>SUCCESS</b></span>',
+        '<a href="https://gitlab.example.com/test/project/-/pipelines/42">#42</a>',
       );
     });
 
-    it("should send canceled message (gray)", async () => {
+    it("should build the pipeline link when the payload has no url", async () => {
       const { connection, intent } = createConnection({
         enableHooks: ["pipeline"],
       });
-
-      await connection.onPipelineCanceled({
-        ...baseEvent,
-        object_attributes: {
-          ...baseEvent.object_attributes,
-          status: "canceled",
-        },
-      });
-
-      expect(intent.sentEvents[0].content.body).toContain("CANCELED");
+      await connection.onPipelineEvent(
+        pipelineEvent({ id: 42, url: undefined }),
+      );
       expect(intent.sentEvents[0].content.formatted_body).toContain(
-        '<span data-mx-color="#a9a9a9"><b>CANCELED</b></span>',
+        '<a href="https://gitlab.example.com/test/project/-/pipelines/42">#42</a>',
       );
     });
 
-    it("should send failed message (red)", async () => {
+    it("should show the duration when present", async () => {
       const { connection, intent } = createConnection({
         enableHooks: ["pipeline"],
       });
-
-      await connection.onPipelineFailed({
-        ...baseEvent,
-        object_attributes: {
-          ...baseEvent.object_attributes,
-          status: "failed",
-        },
-      });
-
-      expect(intent.sentEvents[0].content.body).toContain("FAILED");
-      expect(intent.sentEvents[0].content.formatted_body).toContain(
-        '<span data-mx-color="#ff0000"><b>FAILED</b></span>',
+      await connection.onPipelineEvent(pipelineEvent({ duration: 120 }));
+      expect(intent.sentEvents[0].content.body).toMatch(
+        /\*\* - Duration: 120s$/,
       );
+      expect(intent.sentEvents[0].content.formatted_body).toMatch(
+        /<\/b> - Duration: 120s$/,
+      );
+    });
+
+    it("should omit the duration when absent", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent(
+        pipelineEvent({ status: "running", duration: null }),
+      );
+      expect(intent.sentEvents[0].content.body).not.toContain("Duration");
+      expect(intent.sentEvents[0].content.formatted_body).not.toContain(
+        "Duration",
+      );
+      expect(intent.sentEvents[0].content.formatted_body).toMatch(/<\/b>$/);
+    });
+
+    it("should say tag for tag pipelines", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent(
+        pipelineEvent({ ref: "v1.0.0", tag: true }),
+      );
+      intent.expectEventBodyContains("on tag `v1.0.0`", 0);
+    });
+
+    it("should say branch for branch pipelines", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent(pipelineEvent({ ref: "main" }));
+      intent.expectEventBodyContains("on branch `main`", 0);
+    });
+
+    it("should mention the manual job when waiting for one", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent(
+        pipelineEvent({ status: "manual", duration: null }),
+      );
+      intent.expectEventBodyContains("waiting for a manual job", 0);
+    });
+
+    it("should escape HTML from the payload", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent(
+        pipelineEvent({ ref: "<b>x</b>" }, { name: 'a"<script>' }),
+      );
+      const html = intent.sentEvents[0].content.formatted_body;
+      expect(html).toContain("<code>&lt;b&gt;x&lt;/b&gt;</code>");
+      expect(html).toContain("a&quot;&lt;script&gt;</a>");
+      expect(html).not.toContain("<script>");
     });
   });
 });

@@ -55,7 +55,12 @@ the events marked as default below will be enabled. Otherwise, this is ignored.
 - tag_push \*
 - wiki \*
 - pipeline \*
-  - pipeline.triggered \*
-  - pipeline.canceled \*
-  - pipeline.failed \*
+  - pipeline.running \*
   - pipeline.success \*
+  - pipeline.failed \*
+  - pipeline.canceled \*
+  - pipeline.manual \*
+
+Pipeline events require the **Pipeline events** trigger on the project's GitLab webhook. Hookshot enables it
+when it creates the webhook itself; for a webhook created by hand, or one created by an older version of
+Hookshot, enable the trigger in the project's webhook settings.

@@ -14,6 +14,7 @@ import {
   IGitLabWebhookTagPushEvent,
   IGitLabWebhookWikiPageEvent,
   IGitLabWebhookPipelineEvent,
+  GitLabPipelineStatus,
 } from "../gitlab/WebhookTypes";
 import { CommandConnection } from "./CommandConnection";
 import {
@@ -80,6 +81,41 @@ export type GitLabRepoConnectionTarget =
 const log = new Logger("GitLabRepoConnection");
 const PUSH_MAX_COMMITS = 5;
 
+type NotifiedPipelineStatus = Extract<
+  GitLabPipelineStatus,
+  "running" | "success" | "failed" | "canceled" | "manual"
+>;
+
+const PIPELINE_STATUS_DISPLAY: Record<
+  NotifiedPipelineStatus,
+  { label: string; color: string; suffix?: string }
+> = {
+  running: { label: "RUNNING", color: "#1f75cb" },
+  success: { label: "SUCCESS", color: "#00aa00" },
+  failed: { label: "FAILED", color: "#ff0000" },
+  canceled: { label: "CANCELED", color: "#a9a9a9" },
+  manual: {
+    label: "MANUAL",
+    color: "#ff8800",
+    suffix: "waiting for a manual job",
+  },
+};
+
+function isNotifiedPipelineStatus(
+  status: GitLabPipelineStatus,
+): status is NotifiedPipelineStatus {
+  return Object.hasOwn(PIPELINE_STATUS_DISPLAY, status);
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export type GitLabRepoResponseItem =
   GetConnectionsResponseItem<GitLabRepoConnectionState>;
 
@@ -104,7 +140,8 @@ type AllowedEventsNames =
   | "pipeline.running"
   | "pipeline.success"
   | "pipeline.failed"
-  | "pipeline.canceled";
+  | "pipeline.canceled"
+  | "pipeline.manual";
 
 const AllowedEvents: AllowedEventsNames[] = [
   "merge_request.open",
@@ -126,6 +163,7 @@ const AllowedEvents: AllowedEventsNames[] = [
   "pipeline.success",
   "pipeline.failed",
   "pipeline.canceled",
+  "pipeline.manual",
 ];
 
 const DefaultHooks = AllowedEvents;
@@ -217,6 +255,10 @@ export class GitLabRepoConnection
   static botCommands: BotCommands;
   static helpMessage: (cmdPrefix?: string | undefined) => MatrixMessageContent;
   static ServiceCategory = ConnectionType.Gitlab;
+
+  static readonly NotifiedPipelineStatuses = Object.keys(
+    PIPELINE_STATUS_DISPLAY,
+  ) as NotifiedPipelineStatus[];
 
   static validateState(
     state: unknown,
@@ -431,6 +473,7 @@ export class GitLabRepoConnection
           releases_events: true,
           tag_push_events: true,
           wiki_page_events: true,
+          pipeline_events: true,
         });
       }
     } else if (!gitlabConfig.webhook.publicUrl) {
@@ -936,87 +979,31 @@ ${data.description}`;
     await this.sendEvent(content, {}, { inline: false });
   }
 
-  public async onPipelineTriggered(event: IGitLabWebhookPipelineEvent) {
-    if (this.hookFilter.shouldSkip("pipeline", "pipeline.running")) {
+  public async onPipelineEvent(event: IGitLabWebhookPipelineEvent) {
+    const status = event.object_attributes.status;
+    if (!isNotifiedPipelineStatus(status)) {
+      return;
+    }
+    const display = PIPELINE_STATUS_DISPLAY[status];
+    if (this.hookFilter.shouldSkip("pipeline", `pipeline.${status}`)) {
       return;
     }
 
     log.info(
-      `onPipelineTriggered ${this.roomId} ${this.instance.url}/${this.path}`,
+      `onPipelineEvent ${this.roomId} ${this.instance.url}/${this.path} ${event.object_attributes.id} ${status}`,
     );
-    const { ref } = event.object_attributes;
+    const { id, ref, tag, duration } = event.object_attributes;
+    const url =
+      event.object_attributes.url ??
+      `${event.project.web_url}/-/pipelines/${id}`;
+    const refKind = tag ? "tag" : "branch";
+    const durationText = duration != null ? ` - Duration: ${duration}s` : "";
+    const suffixText = display.suffix ? ` - ${display.suffix}` : "";
 
-    const triggerText = `Pipeline triggered on branch \`${ref}\` for project ${event.project.name} by ${event.user.username}`;
-    const triggerHtml = `Pipeline <b>triggered</b> on branch <code>${ref}</code> for project <a href="${event.project.web_url}">${event.project.name}</a> by <b>${event.user.username}</b>`;
-    await this.intent.sendEvent(this.roomId, {
-      msgtype: "m.notice",
-      body: triggerText,
-      formatted_body: triggerHtml,
-      format: "org.matrix.custom.html",
-    });
-  }
+    const contentText = `Pipeline [#${id}](${url}) **${display.label}** on ${refKind} \`${ref}\` for project [${event.project.name}](${event.project.web_url}) by **${event.user.username}**${suffixText}${durationText}`;
+    const contentHtml = `Pipeline <a href="${escapeHtml(url)}">#${id}</a> <span data-mx-color="${display.color}"><b>${display.label}</b></span> on ${refKind} <code>${escapeHtml(ref)}</code> for project <a href="${escapeHtml(event.project.web_url)}">${escapeHtml(event.project.name)}</a> by <b>${escapeHtml(event.user.username)}</b>${escapeHtml(suffixText)}${durationText}`;
 
-  public async onPipelineSuccess(event: IGitLabWebhookPipelineEvent) {
-    if (this.hookFilter.shouldSkip("pipeline", "pipeline.success")) {
-      return;
-    }
-
-    log.info(
-      `onPipelineSuccess ${this.roomId} ${this.instance.url}/${this.path}`,
-    );
-    const { ref, duration } = event.object_attributes;
-
-    const contentText = `Pipeline SUCCESS on branch \`${ref}\` for project ${event.project.name} by ${event.user.username} - Duration: ${duration ?? "?"}s`;
-    const contentHtml = `Pipeline <span data-mx-color="#00aa00"><b>SUCCESS</b></span> on branch <code>${ref}</code> for project <a href="${event.project.web_url}">${event.project.name}</a> by <b>${event.user.username}</b> - ${duration != null ? `- Duration: ${duration}s` : ""}`;
-
-    await this.intent.sendEvent(this.roomId, {
-      msgtype: "m.notice",
-      body: contentText,
-      formatted_body: contentHtml,
-      format: "org.matrix.custom.html",
-    });
-  }
-
-  public async onPipelineFailed(event: IGitLabWebhookPipelineEvent) {
-    if (this.hookFilter.shouldSkip("pipeline", "pipeline.failed")) {
-      return;
-    }
-
-    log.info(
-      `onPipelineFailed ${this.roomId} ${this.instance.url}/${this.path}`,
-    );
-    const { ref, duration } = event.object_attributes;
-
-    const contentText = `Pipeline FAILED on branch \`${ref}\` for project ${event.project.name} by ${event.user.username} - Duration: ${duration ?? "?"}s`;
-    const contentHtml = `Pipeline <span data-mx-color="#ff0000"><b>FAILED</b></span> on branch <code>${ref}</code> for project <a href="${event.project.web_url}">${event.project.name}</a> by <b>${event.user.username}</b> - ${duration != null ? `- Duration: ${duration}s` : ""}`;
-
-    await this.intent.sendEvent(this.roomId, {
-      msgtype: "m.notice",
-      body: contentText,
-      formatted_body: contentHtml,
-      format: "org.matrix.custom.html",
-    });
-  }
-
-  public async onPipelineCanceled(event: IGitLabWebhookPipelineEvent) {
-    if (this.hookFilter.shouldSkip("pipeline", "pipeline.canceled")) {
-      return;
-    }
-
-    log.info(
-      `onPipelineCanceled ${this.roomId} ${this.instance.url}/${this.path}`,
-    );
-    const { ref, duration } = event.object_attributes;
-
-    const contentText = `Pipeline CANCELED on branch \`${ref}\` for project ${event.project.name} by ${event.user.username} - Duration: ${duration ?? "?"}s`;
-    const contentHtml = `Pipeline <span data-mx-color="#a9a9a9"><b>CANCELED</b></span> on branch <code>${ref}</code> for project <a href="${event.project.web_url}">${event.project.name}</a> by <b>${event.user.username}</b> - ${duration != null ? `- Duration: ${duration}s` : ""}`;
-
-    await this.intent.sendEvent(this.roomId, {
-      msgtype: "m.notice",
-      body: contentText,
-      formatted_body: contentHtml,
-      format: "org.matrix.custom.html",
-    });
+    await this.sendEvent(contentText, { formatted_body: contentHtml });
   }
 
   private async renderDebouncedMergeRequest(

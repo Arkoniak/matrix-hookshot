@@ -346,6 +346,14 @@ const ConnectionConfiguration: FunctionComponent<
             >
               Canceled
             </EventHookCheckbox>
+            <EventHookCheckbox
+              enabledHooks={enabledHooks}
+              parentEvent="pipeline"
+              hookEventName="pipeline.manual"
+              onChange={toggleEnabledHook}
+            >
+              Waiting for manual job
+            </EventHookCheckbox>
           </ul>
         </ul>
       </InputField>

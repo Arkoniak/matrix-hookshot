@@ -201,7 +201,7 @@ describe("GitLab - Pipeline Event", () => {
     E2ESetupTestTimeout,
   );
 
-  test("should only send triggered message for running pipeline", async () => {
+  test("should only send one message for a running pipeline", async () => {
     const user = testEnv.getUser("user");
     const bridgeApi = await getBridgeApi(
       testEnv.opts.config?.widgets?.publicUrl!,
@@ -292,6 +292,6 @@ describe("GitLab - Pipeline Event", () => {
 
     expect(receivedMessages.length).toBe(1);
     const triggeredMessage = receivedMessages[0];
-    expect(triggeredMessage.body.toLowerCase()).toContain("triggered");
+    expect(triggeredMessage.body).toContain("**RUNNING**");
   });
 });

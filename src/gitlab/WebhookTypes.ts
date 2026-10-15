@@ -216,6 +216,24 @@ export interface IGitLabWebhookIssueStateEvent {
   };
 }
 
+/**
+ * Pipeline statuses as sent by GitLab.
+ * See https://docs.gitlab.com/api/pipelines/
+ */
+export type GitLabPipelineStatus =
+  | "created"
+  | "waiting_for_resource"
+  | "preparing"
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "canceling"
+  | "canceled"
+  | "skipped"
+  | "manual"
+  | "scheduled";
+
 export interface IGitLabWebhookPipelineEvent {
   object_kind: "pipeline";
   user: {
@@ -230,10 +248,12 @@ export interface IGitLabWebhookPipelineEvent {
   };
   object_attributes: {
     id: number;
-    status: string;
+    status: GitLabPipelineStatus;
     ref: string;
-    duration: number;
+    tag: boolean;
+    url?: string;
+    duration: number | null;
     created_at: string;
-    finished_at: string;
+    finished_at: string | null;
   };
 }
