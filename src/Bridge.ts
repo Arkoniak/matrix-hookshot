@@ -48,6 +48,7 @@ import {
   IGitLabWebhookReleaseEvent,
   IGitLabWebhookTagPushEvent,
   IGitLabWebhookWikiPageEvent,
+  getGitLabEventOrigin,
 } from "./gitlab/WebhookTypes";
 import {
   JiraIssueEvent,
@@ -502,118 +503,79 @@ export class Bridge {
 
     this.bindHandlerToQueue<IGitLabWebhookMREvent, GitLabRepoConnection>(
       "gitlab.merge_request.open",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onMergeRequestOpened(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookMREvent, GitLabRepoConnection>(
       "gitlab.merge_request.reopen",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onMergeRequestReopened(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookMREvent, GitLabRepoConnection>(
       "gitlab.merge_request.close",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onMergeRequestClosed(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookMREvent, GitLabRepoConnection>(
       "gitlab.merge_request.merge",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onMergeRequestMerged(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookMREvent, GitLabRepoConnection>(
       "gitlab.merge_request.approved",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onMergeRequestReviewed(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookMREvent, GitLabRepoConnection>(
       "gitlab.merge_request.unapproved",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onMergeRequestReviewed(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookMREvent, GitLabRepoConnection>(
       "gitlab.merge_request.approval",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onMergeRequestIndividualReview(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookMREvent, GitLabRepoConnection>(
       "gitlab.merge_request.unapproval",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onMergeRequestIndividualReview(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookMREvent, GitLabRepoConnection>(
       "gitlab.merge_request.update",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onMergeRequestUpdate(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookReleaseEvent, GitLabRepoConnection>(
       "gitlab.release.create",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onRelease(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookTagPushEvent, GitLabRepoConnection>(
       "gitlab.tag_push",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onGitLabTagPush(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookPushEvent, GitLabRepoConnection>(
       "gitlab.push",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onGitLabPush(data),
     );
 
     this.bindHandlerToQueue<IGitLabWebhookWikiPageEvent, GitLabRepoConnection>(
       "gitlab.wiki_page",
-      (data) =>
-        connManager.getConnectionsForGitLabRepo(
-          data.project.path_with_namespace,
-        ),
+      (data) => connManager.getConnectionsForGitLabRepoEvent(data),
       (c, data) => c.onWikiPageEvent(data),
     );
 
@@ -684,15 +646,13 @@ export class Bridge {
       (data) => {
         const iid = data.issue?.iid || data.merge_request?.iid;
         return [
-          ...(iid
+          ...(iid && !getGitLabEventOrigin(data)
             ? connManager.getConnectionsForGitLabIssueWebhook(
                 data.repository.homepage,
                 iid,
               )
             : []),
-          ...connManager.getConnectionsForGitLabRepo(
-            data.project.path_with_namespace,
-          ),
+          ...connManager.getConnectionsForGitLabRepoEvent(data),
         ];
       },
       (c, data) =>
@@ -707,10 +667,12 @@ export class Bridge {
     >(
       "gitlab.issue.reopen",
       (data) =>
-        connManager.getConnectionsForGitLabIssueWebhook(
-          data.repository.homepage,
-          data.object_attributes.iid,
-        ),
+        getGitLabEventOrigin(data)
+          ? []
+          : connManager.getConnectionsForGitLabIssueWebhook(
+              data.repository.homepage,
+              data.object_attributes.iid,
+            ),
       (c) => c.onIssueReopened(),
     );
 
@@ -720,10 +682,12 @@ export class Bridge {
     >(
       "gitlab.issue.close",
       (data) =>
-        connManager.getConnectionsForGitLabIssueWebhook(
-          data.repository.homepage,
-          data.object_attributes.iid,
-        ),
+        getGitLabEventOrigin(data)
+          ? []
+          : connManager.getConnectionsForGitLabIssueWebhook(
+              data.repository.homepage,
+              data.object_attributes.iid,
+            ),
       (c) => c.onIssueClosed(),
     );
 

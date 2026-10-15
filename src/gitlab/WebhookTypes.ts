@@ -214,3 +214,27 @@ export interface IGitLabWebhookIssueStateEvent {
     description: string;
   };
 }
+
+/**
+ * Key under which Hookshot (never GitLab) attaches the origin to events that
+ * arrived on a connection's dedicated webhook URL rather than the shared one.
+ */
+export const GITLAB_DEDICATED_WEBHOOK_KEY = "hookshot_dedicated_webhook";
+
+export interface IGitLabDedicatedWebhookOrigin {
+  /** The webhook id from the request URL. */
+  id: string;
+  /** The `X-Gitlab-Token` header, checked against the connection's secret. */
+  token: string;
+}
+
+export type GitLabEventOrigin = {
+  [GITLAB_DEDICATED_WEBHOOK_KEY]?: IGitLabDedicatedWebhookOrigin;
+};
+
+/** The dedicated webhook an event arrived on, or undefined for the shared one. */
+export function getGitLabEventOrigin(
+  event: object,
+): IGitLabDedicatedWebhookOrigin | undefined {
+  return (event as GitLabEventOrigin)[GITLAB_DEDICATED_WEBHOOK_KEY];
+}

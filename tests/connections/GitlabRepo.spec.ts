@@ -830,4 +830,89 @@ describe("GitLabRepoConnection", () => {
       );
     });
   });
+
+  describe("dedicated webhook", () => {
+    const webhook = { id: "a-webhook-id", secret: "a-webhook-secret" };
+
+    function createDedicatedConnection(
+      state: Partial<GitLabRepoConnectionState> = {},
+      withWebhook = true,
+    ) {
+      const as = AppserviceMock.create();
+      const intent = as.getIntentForUserId("@gitlab:example.test");
+      return new GitLabRepoConnection(
+        ROOM_ID,
+        "state_key",
+        as,
+        {
+          commentDebounceMs: COMMENT_DEBOUNCE_MS,
+          webhook: {
+            secret: "shared",
+            publicUrl: "https://hookshot.example.test/gitlab/webhook/",
+          },
+        } as BridgeConfigGitLab,
+        intent,
+        GitLabRepoConnection.validateState({
+          instance: "bar",
+          path: "foo",
+          dedicatedWebhook: true,
+          ...state,
+        }),
+        {} as UserTokenStore,
+        { url: "https://gitlab.example.com" },
+        {
+          setGitlabDiscussionThreads: () => Promise.resolve(),
+          getGitlabDiscussionThreads: () => Promise.resolve([]),
+        } as unknown as IBridgeStorageProvider,
+        DefaultConfig.messaging,
+        withWebhook ? webhook : undefined,
+      );
+    }
+
+    it("should match only its own id and secret", () => {
+      const connection = createDedicatedConnection();
+      expect(connection.usesDedicatedWebhook).toBe(true);
+      expect(
+        connection.matchesDedicatedWebhook(webhook.id, webhook.secret),
+      ).toBe(true);
+      expect(connection.matchesDedicatedWebhook(webhook.id, "wrong")).toBe(
+        false,
+      );
+      expect(connection.matchesDedicatedWebhook(webhook.id, "")).toBe(false);
+      expect(
+        connection.matchesDedicatedWebhook("other-id", webhook.secret),
+      ).toBe(false);
+    });
+
+    it("should never match for a shared-webhook connection", () => {
+      const { connection } = createConnection();
+      expect(connection.usesDedicatedWebhook).toBe(false);
+      expect(
+        connection.matchesDedicatedWebhook(webhook.id, webhook.secret),
+      ).toBe(false);
+      expect(connection.dedicatedWebhookDetails).toBeUndefined();
+    });
+
+    it("should build the webhook URL from the public URL", () => {
+      const connection = createDedicatedConnection();
+      expect(connection.dedicatedWebhookDetails).toEqual({
+        url: "https://hookshot.example.test/gitlab/webhook/a-webhook-id",
+        secret: webhook.secret,
+      });
+    });
+
+    it("should refuse dedicated state without a webhook", () => {
+      expect(() => createDedicatedConnection({}, false)).toThrow();
+    });
+
+    it("should refuse to change the webhook mode", async () => {
+      const connection = createDedicatedConnection();
+      await expect(
+        connection.onStateUpdate({
+          content: { instance: "bar", path: "foo" },
+          sender: "@alice:example.test",
+        } as never),
+      ).rejects.toThrow("cannot be changed");
+    });
+  });
 });

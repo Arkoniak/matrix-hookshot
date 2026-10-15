@@ -16,6 +16,26 @@ To set up a connection to a GitLab project in a new room:
 6. If you have configured the bridge with a `publicUrl` inside `gitlab.webhook` in your [config](../../setup/gitlab.md), you authenticated with Hookshot on that instance in your admin room, and you have `Maintainer` permissions or greater on the project, the bot will automatically provision the webhook for you.
 7. Otherwise, you'll need to manually configure the project with a webhook that points to your public address for the webhooks listener, sets the "Secret token" to the one you put in your Hookshot configuration (`gitlab.webhook.secret`), and enables all Triggers that need to be bridged (as Hookshot can only bridge events for enabled Triggers). This can be configured on the GitLab webpage for the project under Settings > Webhook Settings. If you do not have access to this page, you must ask someone who does (i.e. someone with at least `Maintainer` permissions on the project) to add the webhook for you.
 
+### Setting up without a GitLab login
+
+`!hookshot gitlab project` needs you to be logged into GitLab, because the shared webhook delivers a
+project's events to every room bridged to that project, so Hookshot must check that you can see it.
+If you do not want to give Hookshot a GitLab token, you can instead connect the room through a webhook
+that only this room uses. Adding that webhook to the project is what proves access.
+
+This requires `publicUrl` inside `gitlab.webhook` in your [config](../../setup/gitlab.md).
+
+1. Do steps 1–3 above.
+2. Send the command `!hookshot gitlab webhook https://mydomain/my/project`.
+3. The bot sends a webhook URL and a secret token to your admin room.
+4. In the GitLab project, under Settings > Webhooks, add a webhook with that URL and secret token, and
+   enable the Triggers you want bridged.
+
+Events sent to this URL reach only this room, and only if the secret token matches. In return, this
+room no longer receives the project's events from the shared webhook. Sending the command again in
+the same room sends the same URL and secret token again. The webhook mode of a connection cannot be
+changed later: remove the connection and create it again.
+
 ## Configuration
 
 This connection supports a few options which can be defined in the room state[^2]:
