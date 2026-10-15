@@ -4,6 +4,11 @@ export interface GitLabInstance {
   url: string;
 }
 
+/** Defaults for GitLab connection options a room has not set itself. */
+export interface GitLabConnectionDefaultOptions {
+  pipelineThreads?: boolean;
+}
+
 export interface BridgeConfigGitLabYAML {
   webhook: {
     publicUrl?: string;
@@ -12,6 +17,7 @@ export interface BridgeConfigGitLabYAML {
   instances: { [name: string]: GitLabInstance };
   userIdPrefix?: string;
   commentDebounceMs?: number;
+  defaultOptions?: GitLabConnectionDefaultOptions;
 }
 
 export class BridgeConfigGitLab {
@@ -30,10 +36,17 @@ export class BridgeConfigGitLab {
   )
   readonly commentDebounceMs: number;
 
+  @configKey(
+    "Default options for GitLab connections. A room's own connection settings take precedence.",
+    true,
+  )
+  readonly defaultOptions?: GitLabConnectionDefaultOptions;
+
   constructor(yaml: BridgeConfigGitLabYAML) {
     this.instances = yaml.instances;
     this.webhook = yaml.webhook;
     this.userIdPrefix = yaml.userIdPrefix || "_gitlab_";
+    this.defaultOptions = yaml.defaultOptions;
 
     for (const name in this.instances) {
       const url = this.instances[name].url;

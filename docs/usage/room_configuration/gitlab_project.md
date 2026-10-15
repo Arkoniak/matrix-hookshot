@@ -87,7 +87,9 @@ failure reason), the manual jobs a pipeline is waiting for, and, after a success
 jobs that were left unrun (manual jobs with `allow_failure: true` do not block the pipeline).
 
 With `pipelineThreads` enabled, the first message about a pipeline starts a thread and every later
-status update of that pipeline is posted in it. If earlier statuses are not enabled, the first status
+status update of that pipeline is posted in it. Bridge administrators can make this the default for
+every room with `gitlab.defaultOptions.pipelineThreads: true` in the bridge config; a room's own
+`pipelineThreads` setting still takes precedence. If earlier statuses are not enabled, the first status
 that is posted starts the thread. Clients without thread support show the updates as replies.
 
 Pipeline events require the **Pipeline events** trigger on the project's GitLab webhook. Hookshot enables it

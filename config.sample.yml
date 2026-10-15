@@ -94,6 +94,9 @@ listeners:
 #  commentDebounceMs:
 #    # (Optional) Aggregate comments by waiting this many miliseconds before posting them to Matrix. Defaults to 5000 (5 seconds)
 #    5000
+#  defaultOptions:
+#    # (Optional) Default options for GitLab connections. A room's own connection settings take precedence.
+#    pipelineThreads: false
 
 #jira:
 #  # (Optional) Configure this to enable Jira support. Only specify `url` if you are using a On Premise install (i.e. not atlassian.com)

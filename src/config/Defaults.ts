@@ -95,6 +95,9 @@ export const DefaultConfigRoot: BridgeConfigRoot = {
       publicUrl: `${hookshotWebhooksUrl}/hookshot/`,
     },
     userIdPrefix: "_gitlab_",
+    defaultOptions: {
+      pipelineThreads: false,
+    },
   },
   jira: {
     webhook: {
