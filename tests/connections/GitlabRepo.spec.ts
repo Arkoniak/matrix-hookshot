@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createMessageQueue } from "../../src/messageQueue";
 import { UserTokenStore } from "../../src/tokens/UserTokenStore";
 import { AppserviceMock } from "../utils/AppserviceMock";
@@ -132,11 +132,23 @@ const COMMENT_DEBOUNCE_MS = 25;
 function createConnection(
   state: Partial<GitLabRepoConnectionState> = {},
   isExistingState = false,
-): { connection: GitLabRepoConnection; intent: IntentMock } {
+): {
+  connection: GitLabRepoConnection;
+  intent: IntentMock;
+  storage: {
+    setGitlabPipelineThreads: ReturnType<typeof vi.fn>;
+  };
+} {
   const mq = createMessageQueue();
   mq.subscribe("*");
   const as = AppserviceMock.create();
   const intent = as.getIntentForUserId("@gitlab:example.test");
+  const storage = {
+    setGitlabDiscussionThreads: () => Promise.resolve(),
+    getGitlabDiscussionThreads: () => Promise.resolve([]),
+    setGitlabPipelineThreads: vi.fn(() => Promise.resolve()),
+    getGitlabPipelineThreads: () => Promise.resolve([]),
+  };
   const connection = new GitLabRepoConnection(
     ROOM_ID,
     "state_key",
@@ -157,13 +169,10 @@ function createConnection(
     {
       url: "https://gitlab.example.com",
     },
-    {
-      setGitlabDiscussionThreads: () => Promise.resolve(),
-      getGitlabDiscussionThreads: () => Promise.resolve([]),
-    } as unknown as IBridgeStorageProvider,
+    storage as unknown as IBridgeStorageProvider,
     DefaultConfig.messaging,
   );
-  return { connection, intent };
+  return { connection, intent, storage };
 }
 
 async function waitForDebouncing(): Promise<void> {
@@ -1124,6 +1133,97 @@ describe("GitLabRepoConnection", () => {
       });
       const html = intent.sentEvents[0].content.formatted_body;
       expect(html).toContain(">&lt;b&gt;x&lt;/b&gt;</a>");
+    });
+
+    describe("threads", () => {
+      const threaded = {
+        enableHooks: ["pipeline"],
+        pipelineThreads: true,
+      } as const;
+
+      function relation(index: number, intent: IntentMock) {
+        return intent.sentEvents[index].content["m.relates_to"] as
+          | { rel_type: string; event_id: string }
+          | undefined;
+      }
+
+      it("should not thread unless enabled", async () => {
+        const { connection, intent } = createConnection({
+          enableHooks: ["pipeline"],
+        });
+        await connection.onPipelineEvent(pipelineEvent({ status: "running" }));
+        await connection.onPipelineEvent(pipelineEvent({ status: "success" }));
+        expect(relation(0, intent)).toBeUndefined();
+        expect(relation(1, intent)).toBeUndefined();
+      });
+
+      it("should post later updates in a thread under the first message", async () => {
+        const { connection, intent } = createConnection(threaded);
+        await connection.onPipelineEvent(pipelineEvent({ status: "running" }));
+        await connection.onPipelineEvent(pipelineEvent({ status: "manual" }));
+        await connection.onPipelineEvent(pipelineEvent({ status: "success" }));
+        expect(relation(0, intent)).toBeUndefined();
+        for (const index of [1, 2]) {
+          expect(relation(index, intent)).toEqual({
+            rel_type: "m.thread",
+            event_id: "event_0",
+            is_falling_back: true,
+            "m.in_reply_to": { event_id: "event_0" },
+          });
+        }
+      });
+
+      it("should start one thread when updates arrive at the same time", async () => {
+        const { connection, intent } = createConnection(threaded);
+        await Promise.all([
+          connection.onPipelineEvent(pipelineEvent({ status: "running" })),
+          connection.onPipelineEvent(pipelineEvent({ status: "failed" })),
+        ]);
+        expect(relation(0, intent)).toBeUndefined();
+        expect(relation(1, intent)?.event_id).toEqual("event_0");
+      });
+
+      it("should keep separate threads for separate pipelines", async () => {
+        const { connection, intent } = createConnection(threaded);
+        await connection.onPipelineEvent(
+          pipelineEvent({ id: 1, status: "running" }),
+        );
+        await connection.onPipelineEvent(
+          pipelineEvent({ id: 2, status: "running" }),
+        );
+        await connection.onPipelineEvent(
+          pipelineEvent({ id: 2, status: "success" }),
+        );
+        await connection.onPipelineEvent(
+          pipelineEvent({ id: 1, status: "failed" }),
+        );
+        expect(relation(1, intent)).toBeUndefined();
+        expect(relation(2, intent)?.event_id).toEqual("event_1");
+        expect(relation(3, intent)?.event_id).toEqual("event_0");
+      });
+
+      it("should start the thread at the first status that is posted", async () => {
+        const { connection, intent } = createConnection({
+          enableHooks: ["pipeline.failed", "pipeline.success"],
+          pipelineThreads: true,
+        });
+        await connection.onPipelineEvent(pipelineEvent({ status: "running" }));
+        await connection.onPipelineEvent(pipelineEvent({ status: "failed" }));
+        expect(intent.sentEvents).toHaveLength(1);
+        expect(relation(0, intent)).toBeUndefined();
+      });
+
+      it("should store the thread roots", async () => {
+        const { connection, storage } = createConnection(threaded);
+        await connection.onPipelineEvent(
+          pipelineEvent({ id: 7, status: "running" }),
+        );
+        await waitForDebouncing();
+        expect(storage.setGitlabPipelineThreads).toHaveBeenCalledWith(
+          connection.connectionId,
+          [{ pipelineId: 7, eventId: "event_0" }],
+        );
+      });
     });
 
     it("should escape HTML from the payload", async () => {

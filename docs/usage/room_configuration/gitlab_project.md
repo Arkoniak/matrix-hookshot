@@ -20,15 +20,16 @@ To set up a connection to a GitLab project in a new room:
 
 This connection supports a few options which can be defined in the room state[^2]:
 
-| Option             | Description                                                         | Allowed values                                            | Default                                      |
-| ------------------ | ------------------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------- |
-| commandPrefix      | Choose the prefix to use when sending commands to the bot           | A string, ideally starts with "!"                         | `!gh`                                        |
-| enableHooks [^1]   | Enable notifications for some event types                           | Array of: [Supported event types](#supported-event-types) | If not defined, defaults are mentioned below |
-| excludingLabels    | Never notify on issues matching these label names                   | Array of: String matching a label name                    | _empty_                                      |
-| ignoreHooks [^1]   | **deprecated** Choose to exclude notifications for some event types | Array of: [Supported event types](#supported-event-types) | _empty_                                      |
-| includeCommentBody | Include the body of a comment when notifying on merge requests      | Boolean                                                   | false                                        |
-| includingLabels    | Only notify on issues matching these label names                    | Array of: String matching a label name                    | _empty_                                      |
-| pushTagsRegex      | Only mention pushed tags which match this regex                     | Regex string                                              | _empty_                                      |
+| Option             | Description                                                             | Allowed values                                            | Default                                      |
+| ------------------ | ----------------------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------- |
+| commandPrefix      | Choose the prefix to use when sending commands to the bot               | A string, ideally starts with "!"                         | `!gh`                                        |
+| enableHooks [^1]   | Enable notifications for some event types                               | Array of: [Supported event types](#supported-event-types) | If not defined, defaults are mentioned below |
+| excludingLabels    | Never notify on issues matching these label names                       | Array of: String matching a label name                    | _empty_                                      |
+| ignoreHooks [^1]   | **deprecated** Choose to exclude notifications for some event types     | Array of: [Supported event types](#supported-event-types) | _empty_                                      |
+| includeCommentBody | Include the body of a comment when notifying on merge requests          | Boolean                                                   | false                                        |
+| includingLabels    | Only notify on issues matching these label names                        | Array of: String matching a label name                    | _empty_                                      |
+| pipelineThreads    | Post each pipeline's status updates in a thread under its first message | Boolean                                                   | false                                        |
+| pushTagsRegex      | Only mention pushed tags which match this regex                         | Regex string                                              | _empty_                                      |
 
 [^1]: `ignoreHooks` is no longer accepted for new state events. Use `enableHooks` to explicitly state all events you want to see.
 
@@ -64,6 +65,10 @@ the events marked as default below will be enabled. Otherwise, this is ignored.
 Pipeline notifications name the jobs that matter, with links: the jobs that failed (with GitLab's
 failure reason), the manual jobs a pipeline is waiting for, and, after a successful pipeline, manual
 jobs that were left unrun (manual jobs with `allow_failure: true` do not block the pipeline).
+
+With `pipelineThreads` enabled, the first message about a pipeline starts a thread and every later
+status update of that pipeline is posted in it. If earlier statuses are not enabled, the first status
+that is posted starts the thread. Clients without thread support show the updates as replies.
 
 Pipeline events require the **Pipeline events** trigger on the project's GitLab webhook. Hookshot enables it
 when it creates the webhook itself; for a webhook created by hand, or one created by an older version of

@@ -1,7 +1,10 @@
 import { ProvisioningStore } from "matrix-appservice-bridge";
 import { IAppserviceStorageProvider, IStorageProvider } from "matrix-bot-sdk";
 import { IssuesGetResponseData } from "../github/Types";
-import { SerializedGitlabDiscussionThreads } from "../gitlab/Types";
+import {
+  SerializedGitlabDiscussionThreads,
+  SerializedGitlabPipelineThreads,
+} from "../gitlab/Types";
 import { OpenProjectWorkPackageCacheState } from "../openproject/State";
 
 // Some RSS feeds can return a very small number of items then bounce
@@ -66,6 +69,13 @@ export interface IBridgeStorageProvider
   setGitlabDiscussionThreads(
     connectionId: string,
     value: SerializedGitlabDiscussionThreads,
+  ): Promise<void>;
+  getGitlabPipelineThreads(
+    connectionId: string,
+  ): Promise<SerializedGitlabPipelineThreads>;
+  setGitlabPipelineThreads(
+    connectionId: string,
+    value: SerializedGitlabPipelineThreads,
   ): Promise<void>;
   storeFeedGuids(url: string, ...guids: string[]): Promise<void>;
   hasSeenFeed(url: string): Promise<boolean>;

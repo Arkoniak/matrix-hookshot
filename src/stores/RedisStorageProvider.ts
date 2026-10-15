@@ -5,7 +5,10 @@ import { Logger } from "matrix-appservice-bridge";
 import { IBridgeStorageProvider, MAX_FEED_ITEMS } from "./StorageProvider";
 import { IFilterInfo, IStorageProvider } from "matrix-bot-sdk";
 import { ProvisionSession } from "matrix-appservice-bridge";
-import { SerializedGitlabDiscussionThreads } from "../gitlab/Types";
+import {
+  SerializedGitlabDiscussionThreads,
+  SerializedGitlabPipelineThreads,
+} from "../gitlab/Types";
 import { BridgeConfigCache } from "../config/sections";
 import { OpenProjectWorkPackageCacheState } from "../openproject/State";
 
@@ -20,6 +23,7 @@ const GH_ISSUES_REVIEW_DATA_KEY = "gh.issues.review_data";
 const FIGMA_EVENT_COMMENT_ID = "figma.comment_event_id";
 const STORED_FILES_KEY = "storedfiles.";
 const GL_DISCUSSIONTHREADS_KEY = "gl.discussion-threads";
+const GL_PIPELINETHREADS_KEY = "gl.pipeline-threads";
 const STORED_FILES_EXPIRE_AFTER = 24 * 60 * 60; // 24 hours
 const COMPLETED_TRANSACTIONS_EXPIRE_AFTER = 24 * 60 * 60; // 24 hours
 const ISSUES_EXPIRE_AFTER = 7 * 24 * 60 * 60; // 7 days
@@ -280,6 +284,21 @@ export class RedisStorageProvider
     value: SerializedGitlabDiscussionThreads,
   ): Promise<void> {
     const key = `${GL_DISCUSSIONTHREADS_KEY}:${connectionId}`;
+    await this.redis.set(key, JSON.stringify(value));
+  }
+
+  public async getGitlabPipelineThreads(
+    connectionId: string,
+  ): Promise<SerializedGitlabPipelineThreads> {
+    const key = `${GL_PIPELINETHREADS_KEY}:${connectionId}`;
+    return JSON.parse((await this.redis.get(key)) ?? "[]");
+  }
+
+  public async setGitlabPipelineThreads(
+    connectionId: string,
+    value: SerializedGitlabPipelineThreads,
+  ): Promise<void> {
+    const key = `${GL_PIPELINETHREADS_KEY}:${connectionId}`;
     await this.redis.set(key, JSON.stringify(value));
   }
 
