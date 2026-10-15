@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, ci-baseline]
+    branches: [main, ci-baseline, ci-spec-only]
     paths-ignore:
       - changelog.d/**'
   pull_request:
