@@ -210,6 +210,81 @@ export class SetupConnection extends CommandConnection {
     );
   }
 
+  @botCommand("gitlab webhook", {
+    help: "Connect a GitLab project through a webhook only this room uses. No GitLab login needed: the webhook URL and secret are sent to your admin room, and events arrive once someone adds them to the project.",
+    requiredArgs: ["url"],
+    includeUserId: true,
+    category: GitLabRepoConnection.ServiceCategory,
+  })
+  public async onGitLabWebhook(userId: string, url: string) {
+    if (!this.config.gitlab) {
+      throw new CommandError(
+        "not-configured",
+        "The bridge is not configured to support GitLab.",
+      );
+    }
+    if (!this.config.gitlab.webhook.publicUrl) {
+      throw new CommandError(
+        "not-configured",
+        "The bridge has no public GitLab webhook URL configured (`gitlab.webhook.publicUrl`).",
+      );
+    }
+
+    await this.checkUserPermissions(
+      userId,
+      GitLabRepoConnection.ServiceCategory,
+      GitLabRepoConnection.CanonicalEventType,
+    );
+
+    const { name, instance } =
+      this.config.gitlab.getInstanceByProjectUrl(url) || {};
+    if (!instance || !name) {
+      throw new CommandError(
+        "not-configured",
+        "No instance found that matches the provided URL.",
+      );
+    }
+    const path = url.slice(instance.url.length + 1).replace(/\/+$/, "");
+    if (!path) {
+      throw new CommandError(
+        "Invalid GitLab url",
+        "The GitLab project url you entered was not valid.",
+      );
+    }
+    const { connection, created } =
+      await GitLabRepoConnection.provisionDedicatedWebhookConnection(
+        this.roomId,
+        { path, instance: name },
+        this.provisionOpts,
+      );
+    const details = connection.dedicatedWebhookDetails;
+    if (!details) {
+      throw new CommandError(
+        "No webhook details",
+        "Could not determine the webhook URL for this connection.",
+      );
+    }
+    if (created) {
+      this.pushConnections(connection);
+    }
+    const adminRoom = await this.getOrCreateAdminRoom(this.intent, userId);
+    const safeRoomId = encodeURIComponent(this.roomId);
+    // Line breaks before and no full stops after the URL and secret are
+    // intentional, to make copying them easier.
+    await adminRoom.sendNotice(
+      `${created ? "You have connected" : "Webhook details for"} ${connection.prettyPath} in https://matrix.to/#/${safeRoomId} .\n` +
+        `In the GitLab project, open Settings → Webhooks and add a webhook with this URL:\n${details.url}\n` +
+        `and this secret token:\n${details.secret}\n` +
+        `Then select the events to send (for example Pipeline events).`,
+    );
+    return this.client.sendNotice(
+      this.roomId,
+      created
+        ? `Room configured to bridge ${connection.prettyPath} through its own webhook. See admin room for the webhook URL and secret.`
+        : `This room already bridges ${connection.prettyPath} through its own webhook. Sent the webhook URL and secret to your admin room again.`,
+    );
+  }
+
   private async checkJiraLogin(userId: string, urlStr: string) {
     const jiraClient = await this.provisionOpts.tokenStore.getJiraForUser(
       userId,

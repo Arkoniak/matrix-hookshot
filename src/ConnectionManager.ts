@@ -39,6 +39,7 @@ import EventEmitter from "events";
 import { HoundConnection } from "./Connections/HoundConnection";
 import { OpenProjectConnection } from "./Connections/OpenProjectConnection";
 import { GitLabInstance } from "./config/sections";
+import { getGitLabEventOrigin } from "./gitlab/WebhookTypes";
 
 const log = new Logger("ConnectionManager");
 
@@ -551,6 +552,27 @@ export class ConnectionManager extends EventEmitter {
     return this.connections.filter(
       (c) => c instanceof GitLabRepoConnection && c.path === pathWithNamespace,
     ) as GitLabRepoConnection[];
+  }
+
+  /**
+   * Repo connections that should receive a GitLab webhook event. An event from
+   * the shared endpoint goes to every connection for the project except those
+   * using a dedicated webhook; an event from a dedicated webhook goes only to
+   * the connection it belongs to, and only if the secret matches.
+   */
+  public getConnectionsForGitLabRepoEvent(event: {
+    project: { path_with_namespace: string };
+  }): GitLabRepoConnection[] {
+    const connections = this.getConnectionsForGitLabRepo(
+      event.project.path_with_namespace,
+    );
+    const origin = getGitLabEventOrigin(event);
+    if (origin) {
+      return connections.filter((c) =>
+        c.matchesDedicatedWebhook(origin.id, origin.token),
+      );
+    }
+    return connections.filter((c) => !c.usesDedicatedWebhook);
   }
 
   public getConnectionsForJiraProject(

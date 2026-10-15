@@ -43,6 +43,7 @@ import { ConnectionType } from "./type";
 import { BridgeConfigGitLab, GitLabInstance } from "../config/sections";
 import { BridgeConfigMessaging } from "../config/sections";
 import { getStringHeader } from "../util/axios";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
 export interface GitLabRepoConnectionState extends IConnectionState {
   instance: string;
@@ -57,7 +58,29 @@ export interface GitLabRepoConnectionState extends IConnectionState {
   pushTagsRegex?: string;
   includingLabels?: string[];
   excludingLabels?: string[];
+  /**
+   * Receive events only on a webhook URL and secret dedicated to this connection,
+   * instead of the shared GitLab webhook endpoint. Such a connection needs no
+   * GitLab token: adding the webhook to the project is the proof of access.
+   */
+  dedicatedWebhook?: boolean;
 }
+
+/**
+ * The id (part of the webhook URL) and secret of a dedicated webhook. Kept in
+ * the bot's room account data, never in room state, which every room member
+ * can read.
+ */
+export interface GitLabDedicatedWebhook {
+  id: string;
+  secret: string;
+}
+
+/** Dedicated webhooks of a room, keyed by connection state key. */
+type GitLabDedicatedWebhookAccountData = Record<
+  string,
+  GitLabDedicatedWebhook | undefined
+>;
 
 interface ConnectionStateValidated extends GitLabRepoConnectionState {
   ignoreHooks: undefined;
@@ -219,6 +242,10 @@ const ConnectionStateSchema = {
       type: "boolean",
       nullable: true,
     },
+    dedicatedWebhook: {
+      type: "boolean",
+      nullable: true,
+    },
     showUrlPreviews: {
       type: "boolean",
       nullable: true,
@@ -246,6 +273,8 @@ export class GitLabRepoConnection
     "uk.half-shot.matrix-hookshot.gitlab.repository";
   static readonly LegacyEventType =
     "uk.half-shot.matrix-github.gitlab.repository";
+  static readonly DedicatedWebhookAccountDataType =
+    "uk.half-shot.matrix-hookshot.gitlab.repository.dedicated-webhooks";
 
   static readonly EventTypes = [
     GitLabRepoConnection.CanonicalEventType,
@@ -305,7 +334,14 @@ export class GitLabRepoConnection
   static async createConnectionForState(
     roomId: string,
     event: StateEvent<Record<string, unknown>>,
-    { as, intent, storage, tokenStore, config }: InstantiateConnectionOpts,
+    {
+      as,
+      intent,
+      storage,
+      tokenStore,
+      config,
+      isStatic,
+    }: InstantiateConnectionOpts,
   ) {
     if (!config.gitlab) {
       throw Error("GitLab is not configured");
@@ -314,6 +350,37 @@ export class GitLabRepoConnection
     const instance = config.gitlab.instances[state.instance];
     if (!instance) {
       throw Error("Instance name not recognised");
+    }
+
+    let dedicatedWebhook: GitLabDedicatedWebhook | undefined;
+    if (state.dedicatedWebhook) {
+      if (isStatic) {
+        throw Error("Static GitLab connections cannot use a dedicated webhook");
+      }
+      dedicatedWebhook = await this.getDedicatedWebhook(
+        intent,
+        roomId,
+        event.stateKey,
+      );
+      if (!dedicatedWebhook) {
+        if (as.isNamespacedUser(event.sender)) {
+          // Hookshot wrote this state, so the webhook must exist. Generating a new
+          // one would silently change a URL someone has already configured.
+          throw Error(
+            `No dedicated webhook found for ${roomId}/${event.stateKey}. Refusing to generate one as the state is owned by us.`,
+          );
+        }
+        log.warn(
+          `No dedicated webhook for ${roomId}/${event.stateKey}, generating a new one.`,
+        );
+        dedicatedWebhook = this.generateDedicatedWebhook();
+        await this.storeDedicatedWebhook(
+          intent,
+          roomId,
+          event.stateKey,
+          dedicatedWebhook,
+        );
+      }
     }
 
     const connection = new GitLabRepoConnection(
@@ -327,6 +394,7 @@ export class GitLabRepoConnection
       instance,
       storage,
       config.messaging,
+      dedicatedWebhook,
     );
 
     const discussionThreads = await storage.getGitlabDiscussionThreads(
@@ -335,6 +403,135 @@ export class GitLabRepoConnection
     connection.setDiscussionThreads(discussionThreads);
 
     return connection;
+  }
+
+  static generateDedicatedWebhook(): GitLabDedicatedWebhook {
+    return { id: randomUUID(), secret: randomBytes(32).toString("hex") };
+  }
+
+  static async getDedicatedWebhook(
+    intent: Intent,
+    roomId: string,
+    stateKey: string,
+  ): Promise<GitLabDedicatedWebhook | undefined> {
+    const webhooks =
+      await intent.underlyingClient.getSafeRoomAccountData<GitLabDedicatedWebhookAccountData>(
+        this.DedicatedWebhookAccountDataType,
+        roomId,
+        {},
+      );
+    return webhooks[stateKey];
+  }
+
+  static async storeDedicatedWebhook(
+    intent: Intent,
+    roomId: string,
+    stateKey: string,
+    webhook: GitLabDedicatedWebhook | undefined,
+  ) {
+    const webhooks =
+      await intent.underlyingClient.getSafeRoomAccountData<GitLabDedicatedWebhookAccountData>(
+        this.DedicatedWebhookAccountDataType,
+        roomId,
+        {},
+      );
+    if (webhook) {
+      webhooks[stateKey] = webhook;
+    } else {
+      delete webhooks[stateKey];
+    }
+    await intent.underlyingClient.setRoomAccountData(
+      this.DedicatedWebhookAccountDataType,
+      roomId,
+      webhooks,
+    );
+  }
+
+  /**
+   * Connect a room to a GitLab project through a dedicated webhook. Unlike
+   * {@link provisionConnection} this needs no GitLab token: events only arrive
+   * once someone with access to the project adds the webhook to it.
+   *
+   * If the room already has a dedicated-webhook connection for the project, it
+   * is returned unchanged so that its URL and secret can be shown again.
+   */
+  public static async provisionDedicatedWebhookConnection(
+    roomId: string,
+    data: Record<string, unknown>,
+    {
+      as,
+      config,
+      intent,
+      storage,
+      tokenStore,
+      getAllConnectionsOfType,
+    }: ProvisionConnectionOpts,
+  ): Promise<{ connection: GitLabRepoConnection; created: boolean }> {
+    if (!config.gitlab) {
+      throw Error("GitLab is not configured");
+    }
+    if (!config.gitlab.webhook.publicUrl) {
+      throw new ApiError(
+        "GitLab webhook.publicUrl is not configured, so there is no URL to give out",
+        ErrCode.DisabledFeature,
+      );
+    }
+    const validData = this.validateState({ ...data, dedicatedWebhook: true });
+    const instance = config.gitlab.instances[validData.instance];
+    if (!instance) {
+      throw Error(
+        `provisionDedicatedWebhookConnection provided an instanceName of ${validData.instance} but the instance does not exist`,
+      );
+    }
+
+    const existing = getAllConnectionsOfType(GitLabRepoConnection).find(
+      (c) =>
+        c.roomId === roomId &&
+        c.instance.url === instance.url &&
+        c.path === validData.path.toLowerCase(),
+    );
+    if (existing) {
+      if (existing.usesDedicatedWebhook) {
+        return { connection: existing, created: false };
+      }
+      throw new ApiError(
+        "A GitLab repo connection for this project already exists",
+        ErrCode.ConflictingConnection,
+        -1,
+        {
+          existingConnection: existing.getProvisionerDetails(),
+        },
+      );
+    }
+
+    const stateEventKey = `${validData.instance}/${validData.path}`;
+    const dedicatedWebhook = this.generateDedicatedWebhook();
+    await this.storeDedicatedWebhook(
+      intent,
+      roomId,
+      stateEventKey,
+      dedicatedWebhook,
+    );
+    const connection = new GitLabRepoConnection(
+      roomId,
+      stateEventKey,
+      as,
+      config.gitlab,
+      intent,
+      validData,
+      tokenStore,
+      instance,
+      storage,
+      config.messaging,
+      dedicatedWebhook,
+    );
+    await intent.underlyingClient.sendStateEvent(
+      roomId,
+      this.CanonicalEventType,
+      connection.stateKey,
+      validData,
+    );
+    return { connection, created: true };
   }
 
   public static async assertUserHasAccessToProject(
@@ -632,6 +829,7 @@ export class GitLabRepoConnection
     private readonly instance: GitLabInstance,
     private readonly storage: IBridgeStorageProvider,
     msgConfig: BridgeConfigMessaging,
+    private readonly dedicatedWebhook?: GitLabDedicatedWebhook,
   ) {
     super(
       roomId,
@@ -652,6 +850,50 @@ export class GitLabRepoConnection
     }
     this.hookFilter = new HookFilter(state.enableHooks ?? DefaultHooks);
     this.commentDebounceMs = config.commentDebounceMs;
+    this.webhookPublicUrl = config.webhook?.publicUrl;
+    if (state.dedicatedWebhook && !dedicatedWebhook) {
+      throw Error(
+        "Invalid state, `dedicatedWebhook` is set but no webhook given",
+      );
+    }
+  }
+
+  private readonly webhookPublicUrl?: string;
+
+  /**
+   * Whether this connection receives events only on its own webhook URL.
+   */
+  public get usesDedicatedWebhook(): boolean {
+    return !!this.state.dedicatedWebhook;
+  }
+
+  /**
+   * The URL and secret to configure on the GitLab project, for a connection
+   * using a dedicated webhook.
+   */
+  public get dedicatedWebhookDetails():
+    | { url: string; secret: string }
+    | undefined {
+    if (!this.dedicatedWebhook || !this.webhookPublicUrl) {
+      return undefined;
+    }
+    return {
+      url: `${this.webhookPublicUrl.replace(/\/+$/, "")}/${this.dedicatedWebhook.id}`,
+      secret: this.dedicatedWebhook.secret,
+    };
+  }
+
+  /**
+   * Whether a request to the dedicated webhook `id` with token `token` belongs to
+   * this connection.
+   */
+  public matchesDedicatedWebhook(id: string, token: string): boolean {
+    if (!this.dedicatedWebhook || this.dedicatedWebhook.id !== id) {
+      return false;
+    }
+    const expected = Buffer.from(this.dedicatedWebhook.secret);
+    const given = Buffer.from(token);
+    return expected.length === given.length && timingSafeEqual(expected, given);
   }
 
   public get path() {
@@ -684,14 +926,23 @@ export class GitLabRepoConnection
 
   public async onStateUpdate(stateEv: MatrixEvent<unknown>) {
     const validatedState = GitLabRepoConnection.validateState(stateEv.content);
-    await this.grantChecker.assertConnectionGranted(
-      this.roomId,
-      {
-        instance: validatedState.instance,
-        path: validatedState.path,
-      },
-      stateEv.sender,
-    );
+    if (!!validatedState.dedicatedWebhook !== this.usesDedicatedWebhook) {
+      throw Error(
+        "The webhook mode of a GitLab connection cannot be changed. Remove the connection and create it again.",
+      );
+    }
+    // A dedicated-webhook connection only receives events that someone with
+    // access to the project chose to send it, so it needs no grant.
+    if (!this.usesDedicatedWebhook) {
+      await this.grantChecker.assertConnectionGranted(
+        this.roomId,
+        {
+          instance: validatedState.instance,
+          path: validatedState.path,
+        },
+        stateEv.sender,
+      );
+    }
     await super.onStateUpdate(stateEv);
     this.hookFilter.enabledHooks = this.state.enableHooks;
   }
@@ -1277,6 +1528,14 @@ ${data.description}`;
       this.stateKey,
       GitLabRepoConnection,
     );
+    if (this.usesDedicatedWebhook) {
+      await GitLabRepoConnection.storeDedicatedWebhook(
+        this.intent,
+        this.roomId,
+        this.stateKey,
+        undefined,
+      );
+    }
     // TODO: Clean up webhooks
   }
 

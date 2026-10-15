@@ -3,6 +3,7 @@ import { MessageQueue } from "../messageQueue";
 import { ApiError, ErrCode } from "../api";
 import { Logger } from "matrix-appservice-bridge";
 import {
+  GITLAB_DEDICATED_WEBHOOK_KEY,
   IGitLabWebhookEvent,
   IGitLabWebhookIssueStateEvent,
   IGitLabWebhookMREvent,
@@ -12,6 +13,8 @@ import {
 import { BridgeConfigGitLab } from "../config/sections";
 
 const log = new Logger("GitLabWebhooksRouter");
+const DEDICATED_WEBHOOK_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export interface OAuthPageParams {
   service?: string;
   result?: string;
@@ -92,6 +95,47 @@ export class GitLabWebhooksRouter {
     }
   }
 
+  /**
+   * A dedicated webhook belongs to a single connection and is checked against
+   * that connection's own secret when the event is routed, not against the
+   * shared secret here.
+   */
+  public verifyDedicatedRequest(req: Request): void {
+    if (typeof req.headers["x-gitlab-token"] !== "string") {
+      throw new ApiError(
+        "Could not handle GitLab request. Missing or repeated X-Gitlab-Token header.",
+        ErrCode.BadValue,
+      );
+    }
+  }
+
+  public onDedicatedWebhook(req: Request, res: Response) {
+    const id = req.params.id;
+    if (typeof id !== "string" || !DEDICATED_WEBHOOK_ID.test(id)) {
+      res.status(404).send("Unknown webhook");
+      return;
+    }
+    res.send("OK");
+    const eventName = this.payloadHandler(req.body);
+    if (eventName) {
+      this.queue
+        .push({
+          eventName,
+          sender: "GithubWebhooks",
+          data: {
+            ...req.body,
+            [GITLAB_DEDICATED_WEBHOOK_KEY]: {
+              id,
+              token: req.headers["x-gitlab-token"],
+            },
+          },
+        })
+        .catch((err) => {
+          log.error(`Failed to emit payload: ${err}`);
+        });
+    }
+  }
+
   public onWebhook(req: Request, res: Response) {
     res.send("OK");
     const eventName = this.payloadHandler(req.body);
@@ -110,8 +154,16 @@ export class GitLabWebhooksRouter {
 
   public getRouter() {
     const router = Router();
-    router.use(json({ verify: this.verifyRequest.bind(this) }));
-    router.post("/webhook", this.onWebhook.bind(this));
+    router.post(
+      "/webhook",
+      json({ verify: this.verifyRequest.bind(this) }),
+      this.onWebhook.bind(this),
+    );
+    router.post(
+      "/webhook/:id",
+      json({ verify: this.verifyDedicatedRequest.bind(this) }),
+      this.onDedicatedWebhook.bind(this),
+    );
     return router;
   }
 }
