@@ -256,6 +256,23 @@ export interface IGitLabWebhookPipelineEvent {
     created_at: string;
     finished_at: string | null;
   };
+  /** The pipeline's jobs. */
+  builds?: IGitLabPipelineBuild[];
+}
+
+/**
+ * A job as listed in a pipeline event. Jobs use the same status names as
+ * pipelines.
+ */
+export interface IGitLabPipelineBuild {
+  id: number;
+  stage: string;
+  name: string;
+  status: GitLabPipelineStatus;
+  failure_reason?: string | null;
+  allow_failure: boolean;
+  when?: string;
+  manual?: boolean;
 }
 
 /**

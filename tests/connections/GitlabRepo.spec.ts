@@ -21,6 +21,7 @@ import {
   IGitLabWebhookWikiPageEvent,
   IGitLabWebhookReleaseEvent,
   IGitLabWebhookPipelineEvent,
+  IGitLabPipelineBuild,
 } from "../../src/gitlab/WebhookTypes";
 import { DefaultConfig } from "../../src/config/Defaults";
 
@@ -1001,6 +1002,128 @@ describe("GitLabRepoConnection", () => {
         pipelineEvent({ status: "manual", duration: null }),
       );
       intent.expectEventBodyContains("waiting for a manual job", 0);
+    });
+
+    function job(
+      id: number,
+      name: string,
+      status: IGitLabPipelineBuild["status"],
+      extra: Partial<IGitLabPipelineBuild> = {},
+    ): IGitLabPipelineBuild {
+      return {
+        id,
+        stage: "test",
+        name,
+        status,
+        allow_failure: false,
+        failure_reason: null,
+        ...extra,
+      };
+    }
+
+    it("should list the failed jobs with links and reasons", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent({
+        ...pipelineEvent({ status: "failed", duration: 31 }),
+        builds: [
+          job(12, "lint", "failed", {
+            allow_failure: true,
+            failure_reason: "script_failure",
+          }),
+          job(11, "test", "failed", { failure_reason: "script_failure" }),
+          job(10, "build", "success"),
+        ],
+      });
+      const { body, formatted_body } = intent.sentEvents[0].content;
+      expect(body).toMatch(
+        /\*\* - failed job: \[test\]\(https:\/\/gitlab\.example\.com\/test\/project\/-\/jobs\/11\) \(script failure\) - Duration: 31s$/,
+      );
+      expect(body).not.toContain("lint");
+      expect(formatted_body).toContain(
+        ' - failed job: <a href="https://gitlab.example.com/test/project/-/jobs/11">test</a> (script failure) - Duration: 31s',
+      );
+    });
+
+    it("should name the manual jobs a pipeline waits for", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent({
+        ...pipelineEvent({ status: "manual", duration: null }),
+        builds: [
+          job(21, "deploy-eu", "manual"),
+          job(20, "deploy-us", "manual"),
+          job(22, "release-notes", "manual", { allow_failure: true }),
+          job(19, "test", "success"),
+        ],
+      });
+      const { body } = intent.sentEvents[0].content;
+      expect(body).toContain(
+        " - waiting for manual jobs: [deploy-us](https://gitlab.example.com/test/project/-/jobs/20), [deploy-eu](https://gitlab.example.com/test/project/-/jobs/21)",
+      );
+      expect(body).not.toContain("waiting for a manual job");
+      expect(body).not.toContain("release-notes");
+    });
+
+    it("should report a manual job left waiting after success", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent({
+        ...pipelineEvent({ status: "success" }),
+        builds: [
+          job(31, "release", "manual", { allow_failure: true }),
+          job(30, "test", "success"),
+        ],
+      });
+      expect(intent.sentEvents[0].content.body).toContain(
+        " - manual job not run: [release](https://gitlab.example.com/test/project/-/jobs/31)",
+      );
+    });
+
+    it("should add nothing for a plain success or a running pipeline", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      const builds = [job(41, "test", "success"), job(42, "deploy", "manual")];
+      await connection.onPipelineEvent({
+        ...pipelineEvent({ status: "success" }),
+        builds: [job(40, "test", "success")],
+      });
+      await connection.onPipelineEvent({
+        ...pipelineEvent({ status: "running", duration: null }),
+        builds,
+      });
+      expect(intent.sentEvents[0].content.body).not.toContain("job");
+      expect(intent.sentEvents[1].content.body).not.toContain("job");
+    });
+
+    it("should cap the number of listed jobs", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent({
+        ...pipelineEvent({ status: "failed" }),
+        builds: [1, 2, 3, 4, 5, 6, 7].map((n) => job(n, `job${n}`, "failed")),
+      });
+      const { body } = intent.sentEvents[0].content;
+      expect(body).toContain("[job5]");
+      expect(body).not.toContain("[job6]");
+      expect(body).toContain(" and 2 more");
+    });
+
+    it("should escape job names in HTML", async () => {
+      const { connection, intent } = createConnection({
+        enableHooks: ["pipeline"],
+      });
+      await connection.onPipelineEvent({
+        ...pipelineEvent({ status: "failed" }),
+        builds: [job(50, "<b>x</b>", "failed")],
+      });
+      const html = intent.sentEvents[0].content.formatted_body;
+      expect(html).toContain(">&lt;b&gt;x&lt;/b&gt;</a>");
     });
 
     it("should escape HTML from the payload", async () => {
